@@ -1,413 +1,555 @@
-<?php
-include 'database.php';
-
-// Initialize variables
-$feedback = "";
-$messages = [];
-$current_tab = $_POST['tab'] ?? $_GET['tab'] ?? 'register';
-
-// Function to generate token
-function generateToken() {
-    return bin2hex(random_bytes(16));
-}
-
-// Handle POST requests based on action
-if ($_SERVER["REQUEST_METHOD"] == "POST") {
-    $action = $_POST['action'] ?? '';
-    
-    switch ($action) {
-        case 'register':
-            $username = $_POST["username"];
-            $password = password_hash($_POST["password"], PASSWORD_DEFAULT);
-            $token = generateToken();
-            
-            $stmt = $conn->prepare("INSERT INTO users (username, password, token) VALUES (?, ?, ?)");
-            $stmt->bind_param("sss", $username, $password, $token);
-            
-            if ($stmt->execute()) {
-                $feedback = "<div class='success-message'>
-                    <span class='check-icon'>✅</span>
-                    <div class='success-text'>User registered successfully!</div>
-                    <div class='token-label'>Your Token:</div>
-                    <div class='token-value' id='userToken'>$token</div>
-                    <button class='copy-btn' onclick=\"copyToken()\">Copy Token</button>
-                </div>";
-            } else {
-                $feedback = "<div class='error-message'>❌ Error: " . $stmt->error . "</div>";
-            }
-            $stmt->close();
-            $current_tab = 'register';
-            break;
-            
-        case 'send_sms':
-            $token = $_POST["token"];
-            $message = $_POST["message"];
-            $recipients = explode(",", $_POST["recipients"]);
-            
-            $stmt = $conn->prepare("SELECT * FROM users WHERE token = ?");
-            $stmt->bind_param("s", $token);
-            $stmt->execute();
-            $result = $stmt->get_result();
-            
-            if ($result->num_rows === 1) {
-                $success = 0;
-                foreach ($recipients as $number) {
-                    $number = trim($number);
-                    $insert = $conn->prepare("INSERT INTO messages (sender, recipient, message, status, timestamp) VALUES (?, ?, ?, 'SENT', NOW())");
-                    $insert->bind_param('sss', $token, $number, $message);
-                    if ($insert->execute()) {
-                        $success++;
-                    }
-                }
-                $feedback = "<div class='success-message'>✅ Message sent to <strong>$success</strong> recipient(s) successfully.</div>";
-            } else {
-                $feedback = "<div class='error-message'>❌ Invalid token. Message not sent.</div>";
-            }
-            $stmt->close();
-            $current_tab = 'send_sms';
-            break;
-            
-        case 'view_messages':
-            $token = $_POST["token"];
-            if ($token) {
-                $stmt = $conn->prepare("SELECT recipient, message, status, timestamp FROM messages WHERE sender = ? ORDER BY timestamp DESC");
-                $stmt->bind_param("s", $token);
-                $stmt->execute();
-                $result = $stmt->get_result();
-                $messages = $result->fetch_all(MYSQLI_ASSOC);
-                $stmt->close();
-                
-                if (empty($messages)) {
-                    $feedback = "<div class='info-message'>📭 No messages found for this token.</div>";
-                }
-            } else {
-                $feedback = "<div class='error-message'>❌ Please enter a token.</div>";
-            }
-            $current_tab = 'view_messages';
-            break;
-    }
-}
-
-$conn->close();
-?>
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Messaging Dashboard</title>
-    <link rel="stylesheet" href="style.css">
     <style>
-        /* Additional styles for the dashboard */
-        .dashboard-container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 20px;
-        }
-        
-        .dashboard-header {
-            text-align: center;
-            margin-bottom: 30px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 30px;
-            border-radius: 15px;
-            box-shadow: 0 8px 25px rgba(0,0,0,0.1);
-        }
-        
-        .dashboard-header h1 {
-            margin: 0 0 10px 0;
-            font-size: 2.5em;
-        }
-        
-        .dashboard-header p {
+        * {
             margin: 0;
-            opacity: 0.9;
+            padding: 0;
+            box-sizing: border-box;
         }
-        
-        .tab-navigation {
-            display: flex;
-            justify-content: center;
-            margin-bottom: 30px;
-            background: white;
-            border-radius: 15px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+
+        body {-
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background: #f0f2f5;
+            height: 100vh;
             overflow: hidden;
         }
-        
-        .tab-btn {
-            flex: 1;
-            padding: 15px 20px;
+
+        .dashboard-container {
+            display: flex;
+            height: 100vh;
+        }
+
+        /* Left Sidebar */
+        .left-sidebar {
+            width: 320px;
+            background: white;
+            border-right: 1px solid #e4e6ea;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .sidebar-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid #e4e6ea;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .sidebar-header h2 {
+            font-size: 24px;
+            font-weight: 700;
+            color: #050505;
+        }
+
+        .header-icons {
+            display: flex;
+            gap: 8px;
+        }
+
+        .icon-btn {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background: #f0f2f5;
             border: none;
-            background: transparent;
             cursor: pointer;
-            font-size: 16px;
-            font-weight: 600;
-            transition: all 0.3s ease;
             display: flex;
             align-items: center;
             justify-content: center;
-            gap: 8px;
+            color: #65676b;
+            font-size: 16px;
+            transition: background 0.2s;
         }
-        
-        .tab-btn:hover {
-            background: #f8f9ff;
+
+        .icon-btn:hover {
+            background: #e4e6ea;
         }
-        
-        .tab-btn.active {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
+
+        .sidebar-description {
+            padding: 16px 20px;
+            border-bottom: 1px solid #e4e6ea;
         }
-        
+
+        .sidebar-description p {
+            color: #65676b;
+            font-size: 14px;
+            line-height: 1.4;
+        }
+
+        .navigation-menu {
+            padding: 16px 12px;
+            flex: 1;
+        }
+
+        .nav-btn {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            padding: 12px 16px;
+            border: none;
+            background: transparent;
+            cursor: pointer;
+            font-size: 15px;
+            font-weight: 500;
+            transition: all 0.2s ease;
+            border-radius: 8px;
+            margin-bottom: 4px;
+            color: #050505;
+            text-align: left;
+            gap: 12px;
+        }
+
+        .nav-btn:hover {
+            background: #f0f2f5;
+        }
+
+        .nav-btn.active {
+            background: #e7f3ff;
+            color: #0084ff;
+        }
+
+        .nav-icon {
+            font-size: 18px;
+            width: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* Main Content */
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: white;
+        }
+
+        .content-header {
+            padding: 16px 24px;
+            border-bottom: 1px solid #e4e6ea;
+            background: white;
+        }
+
+        .content-header h3 {
+            font-size: 20px;
+            font-weight: 600;
+            color: #050505;
+            margin-bottom: 4px;
+        }
+
+        .content-header p {
+            color: #65676b;
+            font-size: 14px;
+        }
+
+        .content-area {
+            flex: 1;
+            background: #f8f9fa;
+            overflow-y: auto;
+            padding: 24px;
+        }
+
         .tab-content {
             display: none;
-            animation: fadeIn 0.3s ease-in;
         }
-        
+
         .tab-content.active {
             display: block;
         }
-        
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
+
+        .form-card {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e4e6ea;
+            max-width: 600px;
+            margin: 0 auto;
         }
-        
-        .success-message, .error-message, .info-message {
-            padding: 15px;
-            border-radius: 10px;
+
+        .form-row {
+            display: flex;
+            gap: 16px;
+            align-items: end;
+        }
+
+        .form-group {
             margin-bottom: 20px;
-            text-align: center;
         }
-        
-        .success-message {
-            background: #d4edda;
-            border: 1px solid #c3e6cb;
-            color: #155724;
+
+        .form-group.flex-1 {
+            flex: 1;
         }
-        
-        .error-message {
-            background: #f8d7da;
-            border: 1px solid #f5c6cb;
-            color: #721c24;
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #050505;
+            font-size: 14px;
         }
-        
-        .info-message {
-            background: #cce7ff;
-            border: 1px solid #99d6ff;
-            color: #004085;
-        }
-        
-        .token-value {
+
+        .form-group input,
+        .form-group textarea {
+            width: 100%;
+            padding: 12px 16px;
+            border: 1px solid #e4e6ea;
+            border-radius: 8px;
+            font-size: 15px;
             background: #f8f9fa;
-            padding: 10px;
-            border-radius: 5px;
-            font-family: monospace;
-            margin: 10px 0;
-            word-break: break-all;
-            font-weight: bold;
+            transition: all 0.2s;
+            font-family: inherit;
+            resize: vertical;
         }
-        
-        .copy-btn {
-            background: #28a745;
+
+        .form-group input:focus,
+        .form-group textarea:focus {
+            outline: none;
+            border-color: #0084ff;
+            background: white;
+            box-shadow: 0 0 0 3px rgba(0, 132, 255, 0.1);
+        }
+
+        .form-group small {
+            color: #65676b;
+            font-size: 12px;
+            margin-top: 6px;
+            display: block;
+        }
+
+        .submit-btn {
+            width: 100%;
+            padding: 14px;
+            background: #0084ff;
             color: white;
             border: none;
-            padding: 8px 15px;
-            border-radius: 5px;
+            border-radius: 8px;
+            font-size: 15px;
+            font-weight: 600;
             cursor: pointer;
-            margin-top: 10px;
+            transition: all 0.2s;
         }
-        
-        .copy-btn:hover {
-            background: #218838;
+
+        .submit-btn:hover {
+            background: #0066cc;
+            transform: translateY(-1px);
         }
-        
-        .message-table {
+
+        .submit-btn:active {
+            transform: translateY(0);
+        }
+
+        /* Messages Table */
+        .messages-table-container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e4e6ea;
+            margin-top: 24px;
+            overflow: hidden;
+            display: none;
+        }
+
+        .messages-table {
             width: 100%;
             border-collapse: collapse;
-            margin-top: 20px;
-            background: white;
-            border-radius: 10px;
-            overflow: hidden;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
         }
-        
-        .message-table th,
-        .message-table td {
-            padding: 12px;
+
+        .messages-table th,
+        .messages-table td {
+            padding: 12px 16px;
             text-align: left;
-            border-bottom: 1px solid #eee;
+            border-bottom: 1px solid #e4e6ea;
+            font-size: 14px;
         }
-        
-        .message-table th {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
+
+        .messages-table th {
+            background: #f8f9fa;
+            color: #050505;
             font-weight: 600;
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
-        
-        .message-table tr:hover {
-            background: #f8f9ff;
+
+        .messages-table tr:hover {
+            background: #f8f9fa;
         }
-        
+
+        .messages-table tr:last-child td {
+            border-bottom: none;
+        }
+
         .status {
             padding: 4px 8px;
-            border-radius: 15px;
-            font-size: 12px;
-            font-weight: bold;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
             text-transform: uppercase;
+            letter-spacing: 0.5px;
+            background: #d1f2eb;
+            color: #0e5233;
         }
-        
-        .status.sent {
-            background: #d4edda;
-            color: #155724;
+
+        /* Feedback Messages */
+        .success-message {
+            background: #d1f2eb;
+            border: 1px solid #a3e4d7;
+            color: #0e5233;
+            padding: 16px 24px;
+            border-radius: 8px;
+            margin: 16px 24px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
         }
-        
-        .card {
-            background: white;
-            border-radius: 15px;
-            padding: 30px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-            margin-bottom: 20px;
-        }
-        
-        .form-header {
+
+        .error-message {
+            background: #fadbd8;
+            border: 1px solid #f1948a;
+            color: #922b21;
+            padding: 16px 24px;
+            border-radius: 8px;
+            margin: 16px 24px;
             text-align: center;
-            margin-bottom: 25px;
         }
-        
-        .form-header h3 {
-            margin: 0 0 10px 0;
-            color: #333;
+
+        .info-message {
+            background: #d6eaf8;
+            border: 1px solid #aed6f1;
+            color: #1b4f72;
+            padding: 16px 24px;
+            border-radius: 8px;
+            margin: 16px 24px;
+            text-align: center;
         }
-        
-        .form-header p {
-            margin: 0;
-            color: #666;
+
+        .check-icon {
+            font-size: 24px;
+        }
+
+        .success-text {
+            font-weight: 600;
+            font-size: 16px;
+        }
+
+        .token-label {
+            font-weight: 500;
+            margin-top: 8px;
+        }
+
+        .token-value {
+            background: #f8f9fa;
+            padding: 12px 16px;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            margin: 8px 0;
+            word-break: break-all;
+            font-size: 13px;
+            border: 1px solid #e4e6ea;
+            min-width: 300px;
+            text-align: center;
+        }
+
+        .copy-btn {
+            background: #16a34a;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+
+        .copy-btn:hover {
+            background: #15803d;
+        }
+
+        /* Responsive Design */
+        @media (max-width: 768px) {
+            .dashboard-container {
+                flex-direction: column;
+            }
+            
+            .left-sidebar {
+                width: 100%;
+                height: auto;
+            }
+            
+            .navigation-menu {
+                display: flex;
+                gap: 8px;
+                overflow-x: auto;
+                padding: 12px;
+            }
+            
+            .nav-btn {
+                white-space: nowrap;
+                margin-bottom: 0;
+                min-width: 150px;
+            }
+            
+            .form-row {
+                flex-direction: column;
+            }
+            
+            .content-area {
+                padding: 16px;
+            }
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #c1c1c1;
+            border-radius: 3px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #a8a8a8;
         }
     </style>
 </head>
 <body>
     <div class="dashboard-container">
-        <!-- Main Header -->
-        <div class="dashboard-header">
-            <h1>📱 Messaging Dashboard</h1>
-            <p>Manage your account, send messages, and view your message history all in one place</p>
-        </div>
-        
-        <!-- Feedback Messages -->
-        <?php if (!empty($feedback)) echo $feedback; ?>
-        
-        <!-- Tab Navigation -->
-        <div class="tab-navigation">
-            <button class="tab-btn <?= $current_tab == 'register' ? 'active' : '' ?>" onclick="switchTab('register')">
-                👤 Register User
-            </button>
-            <button class="tab-btn <?= $current_tab == 'send_sms' ? 'active' : '' ?>" onclick="switchTab('send_sms')">
-                📨 Send SMS
-            </button>
-            <button class="tab-btn <?= $current_tab == 'view_messages' ? 'active' : '' ?>" onclick="switchTab('view_messages')">
-                📤 View Messages
-            </button>
-        </div>
-        
-        <!-- Register User Tab -->
-        <div id="register" class="tab-content <?= $current_tab == 'register' ? 'active' : '' ?>">
-            <div class="card">
-                <div class="form-header">
-                    <h3>👤 Register New User</h3>
-                    <p>Create your account to get started with messaging</p>
+        <!-- Left Sidebar -->
+        <div class="left-sidebar">
+            <!-- Sidebar Header -->
+            <div class="sidebar-header">
+                <h2>📱 Messaging Dashboard</h2>
+                <div class="header-icons">
+                    <button class="icon-btn">⋯</button>
+                    <button class="icon-btn">⚙️</button>
                 </div>
-                <form method="POST" action="">
-                    <input type="hidden" name="action" value="register">
-                    <input type="hidden" name="tab" value="register">
-                    <div class="form-group">
-                        <label for="username">Username</label>
-                        <input type="text" id="username" name="username" placeholder="Enter your username" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="password">Password</label>
-                        <input type="password" id="password" name="password" placeholder="Enter your password" required>
-                    </div>
-                    <button type="submit" class="register-btn">Register Account</button>
-                </form>
+            </div>
+            <div class="sidebar-description">
+                <p>Manage your account, send messages, and view your message history</p>
+            </div>
+            <!-- Navigation Menu -->
+            <div class="navigation-menu">
+                <button class="nav-btn active" onclick="switchTab('register')">
+                    <span class="nav-icon">👤</span>
+                    Register User
+                </button>
+                <button class="nav-btn" onclick="switchTab('send_sms')">
+                    <span class="nav-icon">📨</span>
+                    Send SMS
+                </button>
+                <button class="nav-btn" onclick="switchTab('view_messages')">
+                    <span class="nav-icon">📤</span>
+                    View Messages
+                </button>
             </div>
         </div>
-        
-        <!-- Send SMS Tab -->
-        <div id="send_sms" class="tab-content <?= $current_tab == 'send_sms' ? 'active' : '' ?>">
-            <div class="card">
-                <div class="form-header">
-                    <h3>📨 Send Bulk SMS</h3>
-                    <p>Send messages to multiple recipients using your token</p>
-                </div>
-                <form method="POST" action="">
-                    <input type="hidden" name="action" value="send_sms">
-                    <input type="hidden" name="tab" value="send_sms">
-                    <div class="form-group">
-                        <label for="sms_token">Your Token</label>
-                        <input type="text" id="sms_token" name="token" placeholder="Enter your token" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="recipients">Recipients (comma-separated)</label>
-                        <textarea id="recipients" name="recipients" rows="3" placeholder="e.g. 0701234567,0712345678,0723456789" required></textarea>
-                        <small>Separate multiple phone numbers with commas</small>
-                    </div>
-                    <div class="form-group">
-                        <label for="message">Message Content</label>
-                        <textarea id="message" name="message" rows="5" placeholder="Type your message here..." required></textarea>
-                    </div>
-                    <button type="submit" class="register-btn">Send Message</button>
-                </form>
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Content Header -->
+            <div class="content-header">
+                <h3 id="content-title">Register New User</h3>
+                <p id="content-description">Create your account to get started with messaging</p>
             </div>
-        </div>
-        
-        <!-- View Messages Tab -->
-        <div id="view_messages" class="tab-content <?= $current_tab == 'view_messages' ? 'active' : '' ?>">
-            <div class="card">
-                <div class="form-header">
-                    <h3>📤 View Sent Messages</h3>
-                    <p>Enter your token to view your message history</p>
-                </div>
-                <form method="POST" action="">
-                    <input type="hidden" name="action" value="view_messages">
-                    <input type="hidden" name="tab" value="view_messages">
-                    <div class="form-group">
-                        <label for="view_token">Your Token</label>
-                        <input type="text" id="view_token" name="token" placeholder="Enter your token" required>
+
+            <!-- Feedback Messages -->
+            <div id="feedback-container"></div>
+
+            <!-- Main Content Area -->
+            <div class="content-area">
+                <!-- Register User Tab -->
+                <div id="register" class="tab-content active">
+                    <div class="form-card">
+                        <form id="registerForm">
+                            <div class="form-group">
+                                <label for="username">Username</label>
+                                <input type="text" id="username" name="username" placeholder="Enter your username" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="password">Password</label>
+                                <input type="password" id="password" name="password" placeholder="Enter your password" required>
+                            </div>
+                            <button type="submit" class="submit-btn">Register Account</button>
+                        </form>
                     </div>
-                    <button type="submit" class="register-btn">View Messages</button>
-                </form>
-                
-                <?php if (!empty($messages)): ?>
-                    <table class="message-table">
-                        <thead>
-                            <tr>
-                                <th>#</th>
-                                <th>Recipient</th>
-                                <th>Message</th>
-                                <th>Status</th>
-                                <th>Timestamp</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php foreach ($messages as $index => $msg): ?>
+                </div>
+
+                <!-- Send SMS Tab -->
+                <div id="send_sms" class="tab-content">
+                    <div class="form-card">
+                        <form id="smsForm">
+                            <div class="form-group">
+                                <label for="sms_token">Your Token</label>
+                                <input type="text" id="sms_token" name="token" placeholder="Enter your token" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="recipients">Recipients (comma-separated)</label>
+                                <textarea id="recipients" name="recipients" rows="3" placeholder="e.g. 0701234567,0712345678,0723456789" required></textarea>
+                                <small>Separate multiple phone numbers with commas</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="message">Message Content</label>
+                                <textarea id="message" name="message" rows="4" placeholder="Type your message here..." required></textarea>
+                            </div>
+                            <button type="submit" class="submit-btn">Send Message</button>
+                        </form>
+                    </div>
+                </div>
+               <!-- View Messages Tab -->
+                <div id="view_messages" class="tab-content">
+                    <div class="form-card">
+                        <form id="viewForm">
+                            <div class="form-row">
+                                <div class="form-group flex-1">
+                                    <label for="view_token">Your Token</label>
+                                    <input type="text" id="view_token" name="token" placeholder="Enter your token" required>
+                                </div>
+                                <div class="form-group">
+                                    <button type="submit" class="submit-btn">View Messages</button>
+                                </div>
+                            </div>
+                        </form>
+                    </div>
+
+                    <div id="messages-container" class="messages-table-container">
+                        <table class="messages-table">
+                            <thead>
                                 <tr>
-                                    <td><?= $index + 1 ?></td>
-                                    <td><?= htmlspecialchars($msg['recipient']) ?></td>
-                                    <td><?= htmlspecialchars(substr($msg['message'], 0, 50)) . (strlen($msg['message']) > 50 ? '...' : '') ?></td>
-                                    <td><span class="status <?= strtolower($msg['status']) ?>"><?= htmlspecialchars($msg['status']) ?></span></td>
-                                    <td><?= htmlspecialchars($msg['timestamp']) ?></td>
+                                    <th>#</th>
+                                    <th>Recipient</th>
+                                    <th>Message</th>
+                                    <th>Status</th>
+                                    <th>Timestamp</th>
                                 </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
-                <?php endif; ?>
+                            </thead>
+                            <tbody id="messages-tbody">
+                                <!-- Messages will be populated here -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
-    
+
     <script>
+        // Sample data for demonstration
+        const users = [];
+        const messages = [];
+        let currentUser = null;
+
         // Tab switching functionality
         function switchTab(tabName) {
             // Hide all tab contents
@@ -415,57 +557,258 @@ $conn->close();
                 content.classList.remove('active');
             });
             
-            // Remove active class from all tab buttons
-            document.querySelectorAll('.tab-btn').forEach(btn => {
+            // Remove active class from all nav buttons
+            document.querySelectorAll('.nav-btn').forEach(btn => {
                 btn.classList.remove('active');
             });
             
             // Show selected tab content
             document.getElementById(tabName).classList.add('active');
             
-            // Add active class to clicked tab button
+            // Add active class to clicked nav button
             event.target.classList.add('active');
+            
+            // Update content header
+            updateContentHeader(tabName);
+            
+            // Clear feedback
+            clearFeedback();
         }
-        
+
+        function updateContentHeader(tabName) {
+            const titles = {
+                'register': 'Register New User',
+                'send_sms': 'Send Bulk SMS',
+                'view_messages': 'View Sent Messages'
+            };
+            
+            const descriptions = {
+                'register': 'Create your account to get started with messaging',
+                'send_sms': 'Send messages to multiple recipients using your token',
+                'view_messages': 'Enter your token to view your message history'
+            };
+            
+            document.getElementById('content-title').textContent = titles[tabName];
+            document.getElementById('content-description').textContent = descriptions[tabName];
+        }
+
+        // Generate random token
+        function generateToken() {
+            return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+        }
+
+        // Show feedback message
+        function showFeedback(message, type = 'success') {
+            const container = document.getElementById('feedback-container');
+            container.innerHTML = `<div class="${type}-message">${message}</div>`;
+            
+            // Auto-hide after 5 seconds for non-success messages
+            if (type !== 'success') {
+                setTimeout(() => {
+                    clearFeedback();
+                }, 5000);
+            }
+        }
+
+        function clearFeedback() {
+            document.getElementById('feedback-container').innerHTML = '';
+        }
+
         // Copy token functionality
         function copyToken() {
-            var tokenText = document.getElementById('userToken').innerText;
-            navigator.clipboard.writeText(tokenText).then(function() {
-                // Change button text temporarily
+            const tokenText = document.getElementById('userToken').innerText;
+            navigator.clipboard.writeText(tokenText).then(() => {
                 const btn = event.target;
                 const originalText = btn.innerText;
                 btn.innerText = 'Copied!';
-                btn.style.background = '#218838';
+                btn.style.background = '#22c55e';
                 
                 setTimeout(() => {
                     btn.innerText = originalText;
-                    btn.style.background = '#28a745';
+                    btn.style.background = '#16a34a';
                 }, 2000);
-            }, function(err) {
-                alert('Failed to copy token: ' + err);
+            }, (err) => {
+                showFeedback('❌ Failed to copy token', 'error');
             });
         }
-        
-        // Auto-switch to relevant tab after form submission
-        document.addEventListener('DOMContentLoaded', function() {
-            // If there are messages to display, ensure the view_messages tab is active
-            <?php if (!empty($messages)): ?>
-                switchTabProgrammatically('view_messages');
-            <?php endif; ?>
+
+        // Form handlers
+        document.getElementById('registerForm').addEventListener('submit', (e) => {
+            e.preventDefault();
+            
+            const formData = new FormData(e.target);
+            const username = formData.get('username');
+            const password = formData.get('password');
+            
+            // Check if user already exists
+            if (users.find(user => user.username === username)) {
+                showFeedback('❌ Username already exists', 'error');
+                return;
+            }
+            
+            // Create new user
+            const token = generateToken();
+            const newUser = {
+                id: users.length + 1,
+                username: username,
+                password: password, // In real app, this would be hashed
+                token: token
+            };
+            
+            users.push(newUser);
+            currentUser = newUser;
+            
+            // Show success message with token
+            const successMessage = `
+                <span class="check-icon">✅</span>
+                <div class="success-text">User registered successfully!</div>
+                <div class="token-label">Your Token:</div>
+                <div class="token-value" id="userToken">${token}</div>
+                <button class="copy-btn" onclick="copyToken()">Copy Token</button>
+            `;
+            
+            showFeedback(successMessage, 'success');
+            
+            // Clear form
+            e.target.reset();
         });
-        
-        function switchTabProgrammatically(tabName) {
-            document.querySelectorAll('.tab-content').forEach(content => {
-                content.classList.remove('active');
+
+        document.getElementById('smsForm').addEventListener('submit', (e) => {
+            e.preventDefault();
+            
+            const formData = new FormData(e.target);
+            const token = formData.get('token');
+            const message = formData.get('message');
+            const recipients = formData.get('recipients').split(',').map(r => r.trim());
+            
+            // Validate token
+            const user = users.find(u => u.token === token);
+            if (!user) {
+                showFeedback('❌ Invalid token. Message not sent.', 'error');
+                return;
+            }
+            
+            // Validate recipients
+            if (recipients.length === 0 || recipients[0] === '') {
+                showFeedback('❌ Please enter at least one recipient.', 'error');
+                return;
+            }
+            
+            // Add messages to storage
+            recipients.forEach(recipient => {
+                if (recipient) {
+                    messages.push({
+                        id: messages.length + 1,
+                        sender: token,
+                        recipient: recipient,
+                        message: message,
+                        status: 'SENT',
+                        timestamp: new Date().toLocaleString()
+                    });
+                }
             });
             
-            document.querySelectorAll('.tab-btn').forEach(btn => {
-                btn.classList.remove('active');
+            showFeedback(`✅ Message sent to <strong>${recipients.length}</strong> recipient(s) successfully.`, 'success');
+            
+            // Clear form
+            e.target.reset();
+        });
+
+        document.getElementById('viewForm').addEventListener('submit', (e) => {
+            e.preventDefault();
+            
+            const formData = new FormData(e.target);
+            const token = formData.get('token');
+            
+            if (!token) {
+                showFeedback('❌ Please enter a token.', 'error');
+                return;
+            }
+            
+            // Find messages for this token
+            const userMessages = messages.filter(msg => msg.sender === token);
+            
+            if (userMessages.length === 0) {
+                showFeedback('📭 No messages found for this token.', 'info');
+                document.getElementById('messages-container').style.display = 'none';
+                return;
+            }
+            
+            // Display messages
+            displayMessages(userMessages);
+            clearFeedback();
+        });
+
+        function displayMessages(userMessages) {
+            const tbody = document.getElementById('messages-tbody');
+            tbody.innerHTML = '';
+            
+            userMessages.forEach((msg, index) => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${index + 1}</td>
+                    <td>${msg.recipient}</td>
+                    <td>${msg.message.length > 50 ? msg.message.substring(0, 50) + '...' : msg.message}</td>
+                    <td><span class="status">${msg.status}</span></td>
+                    <td>${msg.timestamp}</td>
+                `;
+                tbody.appendChild(row);
             });
             
-            document.getElementById(tabName).classList.add('active');
-            document.querySelector(`.tab-btn[onclick="switchTab('${tabName}')"]`).classList.add('active');
+            document.getElementById('messages-container').style.display = 'block';
         }
+
+        // Initialize with some demo data
+        function initializeDemoData() {
+            // Add a demo user
+            const demoToken = 'demo123token456';
+            users.push({
+                id: 1,
+                username: 'demo_user',
+                password: 'demo123',
+                token: demoToken
+            });
+            
+            // Add some demo messages
+            const demoMessages = [
+                {
+                    id: 1,
+                    sender: demoToken,
+                    recipient: '0701234567',
+                    message: 'Hello, this is a test message from the messaging dashboard.',
+                    status: 'SENT',
+                    timestamp: new Date(Date.now() - 3600000).toLocaleString()
+                },
+                {
+                    id: 2,
+                    sender: demoToken,
+                    recipient: '0712345678',
+                    message: 'Another test message to demonstrate the functionality.',
+                    status: 'SENT',
+                    timestamp: new Date(Date.now() - 1800000).toLocaleString()
+                },
+                {
+                    id: 3,
+                    sender: demoToken,
+                    recipient: '0723456789',
+                    message: 'Third message for testing the view messages feature.',
+                    status: 'SENT',
+                    timestamp: new Date().toLocaleString()
+                }
+            ];
+            
+            messages.push(...demoMessages);
+        }
+
+        // Initialize demo data when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            initializeDemoData();
+            
+            // Show demo info
+            setTimeout(() => {
+                showFeedback('💡 Demo token available: <strong>demo123token456</strong> (try it in Send SMS or View Messages)', 'info');
+            }, 1000);
+        });
     </script>
 </body>
 </html>
