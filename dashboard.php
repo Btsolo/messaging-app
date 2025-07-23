@@ -1,3 +1,29 @@
+<?php
+require_once 'send_sms.php'; 
+
+$sms_feedback = '';
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['dashboard_send_sms'])) {
+    $token = $_POST['token'] ?? '';
+    $recipients = $_POST['recipients'] ?? '';
+    $message = $_POST['message'] ?? '';
+
+    // Validate input
+    if (!$token || !$recipients || !$message) {
+        $sms_feedback = "<div class='error-message'>❌ All fields are required.</div>";
+    } else {
+
+        // Split recipients by comma
+        $recipientList = array_map('trim', explode(',', $recipients));
+        $result = sendBulkSMS($recipientList, $message);
+
+        if (is_array($result) && isset($result['data'])) {
+            $sms_feedback = "<div class='success-message'>✅ SMS sent successfully!</div>";
+        } else {
+            $sms_feedback = "<div class='error-message'>❌ Failed to send SMS: " . htmlspecialchars(is_string($result) ? $result : json_encode($result)) . "</div>";
+        }
+    }
+}
+?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -465,7 +491,9 @@
             </div>
 
             <!-- Feedback Messages -->
-            <div id="feedback-container"></div>
+            <div id="feedback-container">
+                <?php if (!empty($sms_feedback)) echo $sms_feedback; ?>
+            </div>
 
             <!-- Main Content Area -->
             <div class="content-area">
@@ -489,7 +517,7 @@
                 <!-- Send SMS Tab -->
                 <div id="send_sms" class="tab-content">
                     <div class="form-card">
-                        <form id="smsForm">
+                        <form id="smsForm" method="POST" action="">
                             <div class="form-group">
                                 <label for="sms_token">Your Token</label>
                                 <input type="text" id="sms_token" name="token" placeholder="Enter your token" required>
@@ -503,7 +531,7 @@
                                 <label for="message">Message Content</label>
                                 <textarea id="message" name="message" rows="4" placeholder="Type your message here..." required></textarea>
                             </div>
-                            <button type="submit" class="submit-btn">Send Message</button>
+                            <button type="submit" class="submit-btn" name="dashboard_send_sms">Send Message</button>
                         </form>
                     </div>
                 </div>
@@ -668,47 +696,6 @@
             `;
             
             showFeedback(successMessage, 'success');
-            
-            // Clear form
-            e.target.reset();
-        });
-
-        document.getElementById('smsForm').addEventListener('submit', (e) => {
-            e.preventDefault();
-            
-            const formData = new FormData(e.target);
-            const token = formData.get('token');
-            const message = formData.get('message');
-            const recipients = formData.get('recipients').split(',').map(r => r.trim());
-            
-            // Validate token
-            const user = users.find(u => u.token === token);
-            if (!user) {
-                showFeedback('❌ Invalid token. Message not sent.', 'error');
-                return;
-            }
-            
-            // Validate recipients
-            if (recipients.length === 0 || recipients[0] === '') {
-                showFeedback('❌ Please enter at least one recipient.', 'error');
-                return;
-            }
-            
-            // Add messages to storage
-            recipients.forEach(recipient => {
-                if (recipient) {
-                    messages.push({
-                        id: messages.length + 1,
-                        sender: token,
-                        recipient: recipient,
-                        message: message,
-                        status: 'SENT',
-                        timestamp: new Date().toLocaleString()
-                    });
-                }
-            });
-            
-            showFeedback(`✅ Message sent to <strong>${recipients.length}</strong> recipient(s) successfully.`, 'success');
             
             // Clear form
             e.target.reset();
